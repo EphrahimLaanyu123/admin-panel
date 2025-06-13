@@ -3,7 +3,8 @@ import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import Cookies from 'js-cookie';
 import { ShoppingCart, Package } from 'lucide-react';
 
-
+// Assuming your components are in the './components' directory
+// Corrected import paths with explicit .jsx extensions
 import ProductsComponent from './components/Products.jsx'; 
 import productList from './components/ProductsData.jsx'; 
 import Cart from './components/Cart.jsx';

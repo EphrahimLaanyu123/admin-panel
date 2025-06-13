@@ -1,22 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Trash2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom'; // Import useNavigate
+import BillingModal from './BillingModal';
 
 function Cart({ cart, products, updateQuantity, removeFromCart }) {
-  const navigate = useNavigate(); // Initialize useNavigate
+  const [showBillingModal, setShowBillingModal] = useState(false);
 
-  // Helper function to get image URL for a product
   const getImageUrl = (productId) => {
     const product = products.find((p) => p.id === productId);
     return product?.imageUrl || 'https://placehold.co/80x80/CCCCCC/333333?text=Item';
   };
 
-  // Calculate the total price of all items in the cart
   const totalCartPrice = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-
-  const handleGoToBilling = () => {
-    navigate('/billing'); // Navigate to the /billing route
-  };
 
   return (
     <main className="w-full max-w-3xl bg-white p-8 rounded-xl shadow-2xl mx-auto my-8">
@@ -58,14 +52,23 @@ function Cart({ cart, products, updateQuantity, removeFromCart }) {
             Total: Ksh{totalCartPrice.toFixed(2)}
           </div>
 
-          <div className="mt-8 text-center">
+          <div className="flex justify-center mt-6">
             <button
-              onClick={handleGoToBilling}
-              className="w-full py-3 px-4 rounded-md text-white font-semibold transition-colors duration-200 bg-blue-600 hover:bg-blue-700"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg"
+              onClick={() => setShowBillingModal(true)}
             >
-              Proceed to Billing
+              Proceed to Payment
             </button>
           </div>
+
+          {/* Modal */}
+          {showBillingModal && (
+            <BillingModal
+              cart={cart}
+              totalAmount={totalCartPrice}
+              onClose={() => setShowBillingModal(false)}
+            />
+          )}
         </>
       )}
     </main>
