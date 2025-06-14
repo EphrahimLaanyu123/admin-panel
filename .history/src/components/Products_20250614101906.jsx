@@ -1,5 +1,6 @@
+// Products.jsx
 import React, { useEffect, useState } from 'react';
-import supabase from '../supabaseClient';
+import supabase from './supabaseClient';
 
 function Products({ addToCart }) {
   const [products, setProducts] = useState([]);

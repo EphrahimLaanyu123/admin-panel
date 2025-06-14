@@ -5,7 +5,7 @@ import { ShoppingCart, Package } from 'lucide-react';
 
 
 import ProductsComponent from './components/Products.jsx'; 
-import productList from './components/ProductsData.jsx'; 
+import productList
 import Cart from './components/Cart.jsx';
 import Billing from './components/Billing.jsx';
 import PaymentSuccess from './components/PaymentSuccess.jsx'; 
