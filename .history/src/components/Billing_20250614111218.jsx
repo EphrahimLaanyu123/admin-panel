@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import supabase from '../supabaseClient';
+import supabase from '../supabaseClient'; // Make sure the path is correct
 
 function Billing({ cart, products }) {
   const navigate = useNavigate();
@@ -30,20 +30,28 @@ function Billing({ cart, products }) {
       setIsIpnLoading(true);
       setIpnError('');
       try {
+        const ipnPayload = {
+          url: 'http://localhost:5000/pesapal-ipn-listener',
+          ipn_notification_type: 'GET',
+        };
+
         const response = await fetch('http://localhost:5000/register_ipn_combined', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: 'http://localhost:5000/pesapal-ipn-listener',
-            ipn_notification_type: 'GET',
-          }),
+          body: JSON.stringify(ipnPayload),
         });
 
-        const data = await response.json();
-        if (!response.ok || !data.ipn_registration?.ipn_id) {
-          throw new Error(data?.error || 'IPN registration failed.');
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to register IPN URL.');
         }
-        setFetchedNotificationId(data.ipn_registration.ipn_id);
+
+        const data = await response.json();
+        if (data.ipn_registration?.ipn_id) {
+          setFetchedNotificationId(data.ipn_registration.ipn_id);
+        } else {
+          throw new Error('IPN registration succeeded, but no IPN ID received.');
+        }
       } catch (error) {
         setIpnError(`Failed to get Pesapal ID: ${error.message}`);
       } finally {
@@ -58,7 +66,10 @@ function Billing({ cart, products }) {
 
   const handlePaymentDetailsChange = (e) => {
     const { name, value } = e.target;
-    setPaymentDetails((prev) => ({ ...prev, [name]: value }));
+    setPaymentDetails((prevDetails) => ({
+      ...prevDetails,
+      [name]: value,
+    }));
   };
 
   const initiatePayment = async (event) => {
@@ -68,13 +79,13 @@ function Billing({ cart, products }) {
     setSuccessMessage('');
 
     if (cart.length === 0) {
-      setErrorMessage('Your cart is empty.');
+      setErrorMessage('Your cart is empty. Please add items before proceeding to payment.');
       setIsLoading(false);
       return;
     }
 
     if (isIpnLoading || ipnError || !fetchedNotificationId) {
-      setErrorMessage('Pesapal Notification ID is not ready.');
+      setErrorMessage('Pesapal Notification ID is not ready. Please wait or try again.');
       setIsLoading(false);
       return;
     }
@@ -88,78 +99,73 @@ function Billing({ cart, products }) {
       }
     }
 
-    try {
-      const { data: insertedOrder, error } = await supabase
-        .from('orders')
-        .insert([
-          {
-            email: paymentDetails.email,
-            phone: paymentDetails.phone,
-            first_name: paymentDetails.firstName,
-            last_name: paymentDetails.lastName,
-            address_line_1: paymentDetails.line1,
-            city: paymentDetails.city,
-            country_code: paymentDetails.countryCode,
-            total_amount: parseFloat(totalCartPrice.toFixed(2)),
-            currency: 'KES',
-            description: paymentDetails.description,
-            cart_items: JSON.stringify(cart),
-            payment_status: 'PENDING',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ])
-        .select('id')
-        .single();
+    const payload = {
+      amount: parseFloat(totalCartPrice.toFixed(2)),
+      currency: 'KES',
+      description: paymentDetails.description,
+      callback_url: paymentDetails.callbackUrl,
+      notification_id: fetchedNotificationId,
+      first_name: paymentDetails.firstName,
+      last_name: paymentDetails.lastName,
+      email: paymentDetails.email,
+      phone: paymentDetails.phone,
+      country_code: paymentDetails.countryCode,
+      line_1: paymentDetails.line1,
+      city: paymentDetails.city,
+    };
 
-      if (error || !insertedOrder?.id) {
-        throw new Error(error?.message || 'Order creation failed');
+    try {
+      // 1. Save order to Supabase
+      const { error: supabaseError } = await supabase.from('orders').insert([
+        {
+          email: paymentDetails.email,
+          phone: paymentDetails.phone,
+          first_name: paymentDetails.firstName,
+          last_name: paymentDetails.lastName,
+          address_line_1: paymentDetails.line1,
+          city: paymentDetails.city,
+          country_code: paymentDetails.countryCode,
+          total_amount: payload.amount,
+          currency: payload.currency,
+          description: payload.description,
+          cart_items: JSON.stringify(cart),
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      if (supabaseError) {
+        throw new Error(`Supabase insert failed: ${supabaseError.message}`);
       }
 
-      const orderId = insertedOrder.id;
-      localStorage.setItem('lastOrderId', orderId);
-
-      const callbackUrlWithRef = `${paymentDetails.callbackUrl}?OrderMerchantReference=${orderId}`;
-
-      const payload = {
-        id: orderId,
-        amount: parseFloat(totalCartPrice.toFixed(2)),
-        currency: 'KES',
-        description: paymentDetails.description,
-        callback_url: callbackUrlWithRef,
-        notification_id: fetchedNotificationId,
-        first_name: paymentDetails.firstName,
-        last_name: paymentDetails.lastName,
-        email: paymentDetails.email,
-        phone: paymentDetails.phone,
-        country_code: paymentDetails.countryCode,
-        line_1: paymentDetails.line1,
-        city: paymentDetails.city,
-      };
-
+      // 2. Proceed with Pesapal payment
       const response = await fetch('http://localhost:5000/submit_order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
-      if (!response.ok || !data.redirect_url) {
-        throw new Error(data?.error || 'Failed to get redirect URL from Pesapal.');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to initiate payment.');
       }
 
-      setSuccessMessage('Redirecting to Pesapal...');
-      window.location.href = data.redirect_url;
-    } catch (err) {
-      console.error(err);
-      setErrorMessage(err.message);
+      const data = await response.json();
+      if (data.redirect_url) {
+        setSuccessMessage('Redirecting to Pesapal...');
+        window.location.href = data.redirect_url;
+      } else {
+        setErrorMessage('Payment initiation failed: No redirect URL.');
+      }
+    } catch (error) {
+      console.error('Payment Error:', error);
+      setErrorMessage(error.message);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <main className="w-full max-w-3xl bg-white p-8 rounded-xl shadow-2xl mx-auto my-8 font-inter">
+    <main className="w-full max-w-3xl bg-white p-8 rounded-xl shadow-2xl mx-auto my-8">
       <h2 className="text-3xl font-bold text-gray-800 mb-6 text-center">Billing Information</h2>
 
       {cart.length === 0 ? (
@@ -170,7 +176,7 @@ function Billing({ cart, products }) {
             onClick={() => navigate('/')}
             className="mt-4 py-2 px-4 bg-blue-600 text-white rounded hover:bg-blue-700"
           >
-            Go to Shop
+            Go to Cart
           </button>
         </p>
       ) : (
@@ -199,7 +205,7 @@ function Billing({ cart, products }) {
                     name="firstName"
                     value={paymentDetails.firstName}
                     onChange={handlePaymentDetailsChange}
-                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                     required
                   />
                 </div>
@@ -211,7 +217,7 @@ function Billing({ cart, products }) {
                     name="lastName"
                     value={paymentDetails.lastName}
                     onChange={handlePaymentDetailsChange}
-                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                     required
                   />
                 </div>
@@ -224,7 +230,7 @@ function Billing({ cart, products }) {
                   name="email"
                   value={paymentDetails.email}
                   onChange={handlePaymentDetailsChange}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                   required
                 />
               </div>
@@ -236,7 +242,7 @@ function Billing({ cart, products }) {
                   name="phone"
                   value={paymentDetails.phone}
                   onChange={handlePaymentDetailsChange}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                   required
                 />
               </div>
@@ -248,7 +254,7 @@ function Billing({ cart, products }) {
                   name="line1"
                   value={paymentDetails.line1}
                   onChange={handlePaymentDetailsChange}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                   required
                 />
               </div>
@@ -260,7 +266,7 @@ function Billing({ cart, products }) {
                   name="city"
                   value={paymentDetails.city}
                   onChange={handlePaymentDetailsChange}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                   required
                 />
               </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabaseClient';
+import { v4 as uuidv4 } from 'uuid';
 
 function Billing({ cart, products }) {
   const navigate = useNavigate();
@@ -30,19 +31,23 @@ function Billing({ cart, products }) {
       setIsIpnLoading(true);
       setIpnError('');
       try {
+        const ipnPayload = {
+          url: 'http://localhost:5000/pesapal-ipn-listener',
+          ipn_notification_type: 'GET',
+        };
+
         const response = await fetch('http://localhost:5000/register_ipn_combined', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: 'http://localhost:5000/pesapal-ipn-listener',
-            ipn_notification_type: 'GET',
-          }),
+          body: JSON.stringify(ipnPayload),
         });
 
         const data = await response.json();
+
         if (!response.ok || !data.ipn_registration?.ipn_id) {
           throw new Error(data?.error || 'IPN registration failed.');
         }
+
         setFetchedNotificationId(data.ipn_registration.ipn_id);
       } catch (error) {
         setIpnError(`Failed to get Pesapal ID: ${error.message}`);
@@ -88,54 +93,51 @@ function Billing({ cart, products }) {
       }
     }
 
-    try {
-      const { data: insertedOrder, error } = await supabase
-        .from('orders')
-        .insert([
-          {
-            email: paymentDetails.email,
-            phone: paymentDetails.phone,
-            first_name: paymentDetails.firstName,
-            last_name: paymentDetails.lastName,
-            address_line_1: paymentDetails.line1,
-            city: paymentDetails.city,
-            country_code: paymentDetails.countryCode,
-            total_amount: parseFloat(totalCartPrice.toFixed(2)),
-            currency: 'KES',
-            description: paymentDetails.description,
-            cart_items: JSON.stringify(cart),
-            payment_status: 'PENDING',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ])
-        .select('id')
-        .single();
+    const uniqueOrderId = uuidv4();
+    const callbackUrlWithRef = `${paymentDetails.callbackUrl}?OrderMerchantReference=${uniqueOrderId}`;
 
-      if (error || !insertedOrder?.id) {
-        throw new Error(error?.message || 'Order creation failed');
+    const payload = {
+      id: uniqueOrderId,
+      amount: parseFloat(totalCartPrice.toFixed(2)),
+      currency: 'KES',
+      description: paymentDetails.description,
+      callback_url: callbackUrlWithRef,
+      notification_id: fetchedNotificationId,
+      first_name: paymentDetails.firstName,
+      last_name: paymentDetails.lastName,
+      email: paymentDetails.email,
+      phone: paymentDetails.phone,
+      country_code: paymentDetails.countryCode,
+      line_1: paymentDetails.line1,
+      city: paymentDetails.city,
+    };
+
+    try {
+      const { error: supabaseInsertError } = await supabase.from('orders').insert([
+        {
+          email: paymentDetails.email,
+          phone: paymentDetails.phone,
+          first_name: paymentDetails.firstName,
+          last_name: paymentDetails.lastName,
+          address_line_1: paymentDetails.line1,
+          city: paymentDetails.city,
+          country_code: paymentDetails.countryCode,
+          total_amount: payload.amount,
+          currency: payload.currency,
+          description: payload.description,
+          cart_items: JSON.stringify(cart),
+          payment_status: 'PENDING',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ]);
+
+      if (supabaseInsertError) {
+        throw new Error(`Supabase insert failed: ${supabaseInsertError.message}`);
       }
 
-      const orderId = insertedOrder.id;
-      localStorage.setItem('lastOrderId', orderId);
-
-      const callbackUrlWithRef = `${paymentDetails.callbackUrl}?OrderMerchantReference=${orderId}`;
-
-      const payload = {
-        id: orderId,
-        amount: parseFloat(totalCartPrice.toFixed(2)),
-        currency: 'KES',
-        description: paymentDetails.description,
-        callback_url: callbackUrlWithRef,
-        notification_id: fetchedNotificationId,
-        first_name: paymentDetails.firstName,
-        last_name: paymentDetails.lastName,
-        email: paymentDetails.email,
-        phone: paymentDetails.phone,
-        country_code: paymentDetails.countryCode,
-        line_1: paymentDetails.line1,
-        city: paymentDetails.city,
-      };
+      // ✅ Save order ID to local storage
+      localStorage.setItem('lastOrderId', uniqueOrderId);
 
       const response = await fetch('http://localhost:5000/submit_order', {
         method: 'POST',
@@ -144,15 +146,16 @@ function Billing({ cart, products }) {
       });
 
       const data = await response.json();
+
       if (!response.ok || !data.redirect_url) {
         throw new Error(data?.error || 'Failed to get redirect URL from Pesapal.');
       }
 
       setSuccessMessage('Redirecting to Pesapal...');
       window.location.href = data.redirect_url;
-    } catch (err) {
-      console.error(err);
-      setErrorMessage(err.message);
+    } catch (error) {
+      console.error('Payment Initiation Error:', error);
+      setErrorMessage(error.message);
     } finally {
       setIsLoading(false);
     }

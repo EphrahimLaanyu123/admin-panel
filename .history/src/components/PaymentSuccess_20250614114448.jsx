@@ -70,9 +70,9 @@ const PaymentSuccess = () => {
       const { error } = await supabase
         .from('orders')
         .update({
-          tracking_id: transactionDetails.trackingId,
+          order_tracking_id: transactionDetails.trackingId,
           payment_status: transactionDetails.status,
-          amount: transactionDetails.amount,
+          amount_paid: transactionDetails.amount,
           payment_method: transactionDetails.method,
           payment_reference: transactionDetails.reference,
           updated_at: new Date().toISOString(),

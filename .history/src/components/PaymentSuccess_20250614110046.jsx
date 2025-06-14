@@ -1,14 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import supabase from '../supabaseClient'; // Adjust this import if needed
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase client
+const supabase = createClient(
+  'https://your-project-id.supabase.co', // 🔁 Replace with your Supabase URL
+  'your-anon-key' // 🔁 Replace with your Supabase anon key
+);
 
 const PaymentSuccess = () => {
   const [searchParams] = useSearchParams();
   const [paymentStatus, setPaymentStatus] = useState('Checking payment status...');
   const [transactionDetails, setTransactionDetails] = useState(null);
   const [error, setError] = useState('');
-  const [isPosting, setIsPosting] = useState(false);
-  const [postMessage, setPostMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [paymentData, setPaymentData] = useState(null);
 
   useEffect(() => {
     const trackingId = searchParams.get('OrderTrackingId');
@@ -31,23 +37,25 @@ const PaymentSuccess = () => {
         }
 
         const data = await response.json();
+        setPaymentData(data); // Save full data for DB insert later
 
         if (data.payment_status_description === 'Completed') {
           setPaymentStatus('Payment Successful!');
-          setTransactionDetails({
-            trackingId,
-            status: data.payment_status_description,
-            amount: data.amount,
-            method: data.payment_method,
-            reference: data.payment_reference,
-          });
         } else {
           setPaymentStatus(`Payment ${data.payment_status_description}`);
-          setError(`Payment was not completed. Status: ${data.payment_status_description}`);
+          setError(`Status: ${data.payment_status_description}`);
         }
+
+        setTransactionDetails({
+          trackingId,
+          status: data.payment_status_description,
+          amount: data.amount,
+          method: data.payment_method,
+          reference: data.payment_reference,
+        });
       } catch (err) {
         console.error('Error verifying payment:', err);
-        setError('An error occurred while verifying the payment. Please try again.');
+        setError('An error occurred while verifying the payment.');
         setPaymentStatus('Error verifying payment');
       }
     };
@@ -56,37 +64,34 @@ const PaymentSuccess = () => {
   }, [searchParams]);
 
   const handleCompletePayment = async () => {
-    setIsPosting(true);
-    setPostMessage('');
-    const orderId = localStorage.getItem('lastOrderId');
+    if (!paymentData) return setError('No payment data available.');
 
-    if (!orderId || !transactionDetails) {
-      setPostMessage('Order ID or transaction details missing.');
-      setIsPosting(false);
-      return;
-    }
+    const { payment_method, amount, created_date, confirmation_code, payment_status_description,
+      description, merchant_reference, payment_reference, payment_account, currency } = paymentData;
 
-    try {
-      const { error } = await supabase
-        .from('orders')
-        .update({
-          tracking_id: transactionDetails.trackingId,
-          payment_status: transactionDetails.status,
-          amount: transactionDetails.amount,
-          payment_method: transactionDetails.method,
-          payment_reference: transactionDetails.reference,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', orderId);
+    const { data, error } = await supabase.from('orders').insert([
+      {
+        tracking_id: transactionDetails.trackingId,
+        merchant_reference: merchant_reference,
+        amount: amount,
+        payment_method: payment_method,
+        payment_status: payment_status_description,
+        confirmation_code: confirmation_code,
+        created_date: created_date,
+        description: description,
+        payment_account: payment_account,
+        currency: currency,
+        payment_reference: payment_reference
+      }
+    ]);
 
-      if (error) throw error;
-
-      setPostMessage('Order updated successfully in Supabase!');
-    } catch (err) {
-      console.error(err);
-      setPostMessage(`Failed to update order: ${err.message}`);
-    } finally {
-      setIsPosting(false);
+    if (error) {
+      console.error('Error inserting into Supabase:', error);
+      setSuccessMessage('');
+      setError('Failed to save order to database.');
+    } else {
+      setError('');
+      setSuccessMessage('Order successfully saved to database!');
     }
   };
 
@@ -99,25 +104,20 @@ const PaymentSuccess = () => {
           <p><strong>Tracking ID:</strong> {transactionDetails.trackingId}</p>
           <p><strong>Status:</strong> {transactionDetails.status}</p>
           <p><strong>Amount:</strong> KES {transactionDetails.amount}</p>
-          {transactionDetails.method && (
-            <p><strong>Method:</strong> {transactionDetails.method}</p>
-          )}
-          {transactionDetails.reference && (
-            <p><strong>Reference:</strong> {transactionDetails.reference}</p>
-          )}
+          {transactionDetails.method && <p><strong>Method:</strong> {transactionDetails.method}</p>}
+          {transactionDetails.reference && <p><strong>Reference:</strong> {transactionDetails.reference}</p>}
 
           <button
             onClick={handleCompletePayment}
-            disabled={isPosting}
-            className="mt-6 w-full py-2 px-4 bg-blue-600 text-white rounded hover:bg-blue-700 transition duration-200"
+            className="mt-4 bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded"
           >
-            {isPosting ? 'Posting...' : 'Complete Payment'}
+            Complete Payment
           </button>
-
-          {postMessage && (
-            <p className="mt-4 text-center text-sm text-gray-700">{postMessage}</p>
-          )}
         </div>
+      )}
+
+      {successMessage && (
+        <div className="text-green-700 mt-4">{successMessage}</div>
       )}
 
       {error && (
